@@ -1,0 +1,173 @@
+<title>TaskFlow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: single centered column, form on top, filters, then task list */
+:root {
+  --bg: #f3f5f7; --surface: #ffffff; --fg: #18212b; --muted: #5d6b7a;
+  --line: #d9e0e7; --accent: #1f6feb; --accent-fg: #ffffff;
+  --high: #c2410c; --med: #a16207; --low: #15803d;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f151c; --surface: #17202a; --fg: #e6edf3; --muted: #93a1b0;
+  --line: #2a3644; --accent: #4f8ff7; --accent-fg: #0b1118;
+  --high: #fb923c; --med: #facc15; --low: #4ade80; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f151c; --surface: #17202a; --fg: #e6edf3; --muted: #93a1b0;
+  --line: #2a3644; --accent: #4f8ff7; --accent-fg: #0b1118;
+  --high: #fb923c; --med: #facc15; --low: #4ade80; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 680px; margin: 0 auto; padding-block: 32px; display: grid; gap: 20px; }
+header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.stats { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+form { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; grid-template-columns: 1fr auto auto auto; }
+input, select, button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-width: 0; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) { form { grid-template-columns: 1fr 1fr; } form input[type=text] { grid-column: 1 / -1; } }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.filters button { background: transparent; }
+.filters button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.filters .clear { margin-left: auto; color: var(--muted); border: none; }
+ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+li { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--p); border-radius: 6px; padding: 10px 12px; display: flex; align-items: center; gap: 12px; }
+li.high { --p: var(--high); } li.medium { --p: var(--med); } li.low { --p: var(--low); }
+li input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.body { flex: 1; min-width: 0; }
+.title { overflow-wrap: anywhere; }
+li.done .title { text-decoration: line-through; color: var(--muted); }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; gap: 10px; margin-top: 2px; }
+.meta .overdue { color: var(--high); }
+.del { border: none; background: transparent; color: var(--muted); font-size: 18px; padding: 4px 8px; }
+.empty { text-align: center; color: var(--muted); padding: 32px 0; }
+.err { color: var(--high); font-size: 13px; grid-column: 1 / -1; margin: 0; }
+</style>
+
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+const STORAGE_KEY = "taskflow.tasks";
+
+// Example tasks shown on first load
+const SAMPLE = [
+  { id: 1, title: "Finish CMSC assignment", priority: "high", due: "2026-10-24", done: false },
+  { id: 2, title: "Update portfolio README", priority: "medium", due: "", done: false },
+  { id: 3, title: "Push Sprite Sheet Slicer fix", priority: "low", due: "2026-10-20", done: true },
+];
+
+// Load saved tasks; fall back to samples if storage is empty or blocked
+function loadTasks() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : SAMPLE;
+  } catch { return SAMPLE; }
+}
+
+function TaskForm({ onAdd }) {
+  const [title, setTitle] = useState("");
+  const [priority, setPriority] = useState("medium");
+  const [due, setDue] = useState("");
+  const [error, setError] = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!title.trim()) { setError("Type a task name first."); return; }
+    onAdd({ title: title.trim(), priority, due });
+    setTitle(""); setDue(""); setError("");
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input id="title" type="text" placeholder="What needs doing?" value={title}
+        onChange={e => setTitle(e.target.value)} aria-label="Task name" />
+      <select id="priority" value={priority} onChange={e => setPriority(e.target.value)} aria-label="Priority">
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <input id="due" type="date" value={due} onChange={e => setDue(e.target.value)} aria-label="Due date" />
+      <button className="primary" type="submit">Add task</button>
+      {error && <p className="err">{error}</p>}
+    </form>
+  );
+}
+
+function TaskItem({ task, onToggle, onDelete }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = task.due && !task.done && task.due < today;
+  return (
+    <li className={`${task.priority} ${task.done ? "done" : ""}`}>
+      <input type="checkbox" checked={task.done} onChange={() => onToggle(task.id)}
+        aria-label={`Mark "${task.title}" done`} />
+      <div className="body">
+        <div className="title">{task.title}</div>
+        <div className="meta">
+          <span>{task.priority}</span>
+          {task.due && <span className={overdue ? "overdue" : ""}>{overdue ? "overdue · " : "due "}{task.due}</span>}
+        </div>
+      </div>
+      <button className="del" onClick={() => onDelete(task.id)} aria-label={`Delete "${task.title}"`}>×</button>
+    </li>
+  );
+}
+
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+function App() {
+  const [tasks, setTasks] = useState(loadTasks);
+  const [filter, setFilter] = useState("all");
+
+  // Save to localStorage whenever tasks change
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)); } catch {}
+  }, [tasks]);
+
+  const addTask = ({ title, priority, due }) =>
+    setTasks(prev => [...prev, { id: Date.now(), title, priority, due, done: false }]);
+  const toggleTask = id =>
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  const deleteTask = id => setTasks(prev => prev.filter(t => t.id !== id));
+  const clearDone = () => setTasks(prev => prev.filter(t => !t.done));
+
+  // Filter, then sort: unfinished first, then by priority
+  const visible = useMemo(() => tasks
+    .filter(t => filter === "all" || (filter === "active" ? !t.done : t.done))
+    .sort((a, b) => a.done - b.done || PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]),
+  [tasks, filter]);
+
+  const remaining = tasks.filter(t => !t.done).length;
+
+  return (
+    <div className="wrap">
+      <header>
+        <h1>TaskFlow</h1>
+        <span className="stats">{remaining} open / {tasks.length} total</span>
+      </header>
+      <TaskForm onAdd={addTask} />
+      <div className="filters">
+        {["all", "active", "done"].map(f => (
+          <button key={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+            {f[0].toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+        <button className="clear" onClick={clearDone}>Clear completed</button>
+      </div>
+      {visible.length === 0
+        ? <p className="empty">No tasks here. Add one above.</p>
+        : <ul>{visible.map(t => <TaskItem key={t.id} task={t} onToggle={toggleTask} onDelete={deleteTask} />)}</ul>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
